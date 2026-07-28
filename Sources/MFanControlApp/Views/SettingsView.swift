@@ -43,6 +43,7 @@ private struct PresetSettingsView: View {
         presetRow(.quiet)
         presetRow(.balanced)
         presetRow(.cool)
+        maximumPresetRow
       } header: {
         Text("Fan speed")
       }
@@ -75,6 +76,19 @@ private struct PresetSettingsView: View {
         step: 5
       )
       Text("\(presetStore.percentage(for: preset) ?? value)%")
+        .monospacedDigit()
+        .frame(width: 38, alignment: .trailing)
+    }
+  }
+
+  private var maximumPresetRow: some View {
+    HStack {
+      Label(FanPreset.maximum.title, systemImage: FanPreset.maximum.systemImage)
+        .frame(width: 92, alignment: .leading)
+      Text("Uses each fan’s reported maximum")
+        .foregroundStyle(.secondary)
+      Spacer()
+      Text("100%")
         .monospacedDigit()
         .frame(width: 38, alignment: .trailing)
     }
@@ -166,10 +180,25 @@ private struct AboutSettingsView: View {
         .font(.title2.weight(.semibold))
       Text("Version \(version)")
         .foregroundStyle(.secondary)
-      Text("Open-source, source-only fan control for Apple Silicon. Experimental hardware support.")
+      Text(AboutPresentation.productDescription)
         .multilineTextAlignment(.center)
         .foregroundStyle(.secondary)
-        .frame(maxWidth: 360)
+        .frame(maxWidth: 400)
+      Text(AboutPresentation.statusNote)
+        .font(.caption)
+        .multilineTextAlignment(.center)
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: 400)
+      HStack(spacing: 8) {
+        Link("View on GitHub", destination: AboutPresentation.repositoryURL)
+        Text("·")
+          .foregroundStyle(.tertiary)
+        Link("Report an Issue", destination: AboutPresentation.issuesURL)
+        Text("·")
+          .foregroundStyle(.tertiary)
+        Link("MIT License", destination: AboutPresentation.licenseURL)
+      }
+      .font(.caption)
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
   }

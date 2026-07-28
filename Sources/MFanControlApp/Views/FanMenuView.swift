@@ -127,6 +127,8 @@ struct FanMenuView: View {
   private var presetPicker: some View {
     HStack(spacing: 6) {
       ForEach(FanPreset.visible) { preset in
+        let selectionColor = preset == .maximum ? Color.orange : Color.accentColor
+
         Button {
           store.applyPreset(preset, percentage: presetStore.percentage(for: preset))
         } label: {
@@ -143,12 +145,12 @@ struct FanMenuView: View {
           .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .foregroundStyle(store.activePreset == preset ? Color.accentColor : .primary)
+        .foregroundStyle(store.activePreset == preset ? selectionColor : .primary)
         .background {
           RoundedRectangle(cornerRadius: 8, style: .continuous)
             .fill(
               store.activePreset == preset
-                ? Color.accentColor.opacity(0.16)
+                ? selectionColor.opacity(0.16)
                 : Color.secondary.opacity(0.08)
             )
         }
@@ -156,7 +158,7 @@ struct FanMenuView: View {
           RoundedRectangle(cornerRadius: 8, style: .continuous)
             .stroke(
               store.activePreset == preset
-                ? Color.accentColor.opacity(0.4)
+                ? selectionColor.opacity(0.4)
                 : Color.clear,
               lineWidth: 1
             )

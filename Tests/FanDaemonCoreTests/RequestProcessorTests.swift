@@ -87,6 +87,19 @@ final class RequestProcessorTests: XCTestCase {
     XCTAssertEqual(calls, ["snapshot", "manual:0:2900", "manual:1:3200", "snapshot"])
   }
 
+  func testMaxPresetAppliesEachFansExactMaximum() async {
+    let controller = PresetFanController(maximumRPMs: [5_349, 5_777])
+    let processor = RequestProcessor(controller: controller)
+
+    let result = await processor.handle(
+      FanRequest(id: "max", command: .setPreset, percentage: 100)
+    )
+
+    XCTAssertTrue(result.response.ok)
+    let calls = await controller.calls
+    XCTAssertEqual(calls, ["snapshot", "manual:0:5349", "manual:1:5777", "snapshot"])
+  }
+
   func testPresetFailureRollsEveryFanBackToAutomatic() async {
     let controller = PresetFanController(failingFan: 1)
     let processor = RequestProcessor(controller: controller)
@@ -104,9 +117,14 @@ final class RequestProcessorTests: XCTestCase {
 private actor PresetFanController: FanControlling {
   private(set) var calls: [String] = []
   private let failingFan: Int?
+  private let maximumRPMs: [Int]
 
-  init(failingFan: Int? = nil) {
+  init(
+    failingFan: Int? = nil,
+    maximumRPMs: [Int] = [5_000, 6_000]
+  ) {
     self.failingFan = failingFan
+    self.maximumRPMs = maximumRPMs
   }
 
   func discoverHardware() async throws -> HardwareProfile {
@@ -129,7 +147,7 @@ private actor PresetFanController: FanControlling {
         actualRPM: 2_000,
         targetRPM: 2_000,
         minimumRPM: 2_000,
-        maximumRPM: 5_000,
+        maximumRPM: maximumRPMs[0],
         mode: .automatic
       ),
       FanSnapshot(
@@ -137,7 +155,7 @@ private actor PresetFanController: FanControlling {
         actualRPM: 2_200,
         targetRPM: 2_200,
         minimumRPM: 2_000,
-        maximumRPM: 6_000,
+        maximumRPM: maximumRPMs[1],
         mode: .automatic
       ),
     ]
@@ -153,7 +171,7 @@ private actor PresetFanController: FanControlling {
       actualRPM: rpm,
       targetRPM: rpm,
       minimumRPM: 2_000,
-      maximumRPM: fan == 0 ? 5_000 : 6_000,
+      maximumRPM: maximumRPMs[fan],
       mode: .manual
     )
   }
@@ -164,7 +182,7 @@ private actor PresetFanController: FanControlling {
       actualRPM: 2_000,
       targetRPM: 2_000,
       minimumRPM: 2_000,
-      maximumRPM: fan == 0 ? 5_000 : 6_000,
+      maximumRPM: maximumRPMs[fan],
       mode: .automatic
     )
   }

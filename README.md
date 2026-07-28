@@ -45,7 +45,7 @@ Software tests passing does not make a hardware profile verified.
 
 - A compact SwiftUI `MenuBarExtra` with CPU maximum temperature.
 - Per-fan actual, target, minimum, and maximum RPM telemetry.
-- Auto, Quiet, Balanced, and Cool fixed-RPM presets.
+- Auto, Quiet, Balanced, Cool, and Max fixed-RPM presets.
 - Manual per-fan RPM controls behind a disclosure.
 - Editable preset percentages and sensor/helper settings.
 - A privileged launchd helper installed through the standard macOS Installer.
@@ -207,6 +207,8 @@ Supported modes are `--debug`, `--logs`, `--telemetry`, and `--verify`.
 - **Auto** returns all fans to macOS control.
 - **Quiet**, **Balanced**, and **Cool** calculate a target independently for
   each fan from its current minimum and maximum.
+- **Max** uses each fan’s exact current SMC-reported maximum. It is fixed at
+  100% and cannot be configured or persisted.
 - **Manual control** applies one bounded target to one fan.
 - **Settings → Presets** changes the persisted preset percentages.
 - **Settings → Sensors** shows the validated CPU, GPU, and battery readings
@@ -220,7 +222,7 @@ target = roundTo100(minimum + percentage × (maximum - minimum))
 ```
 
 Defaults are Quiet 10%, Balanced 30%, and Cool 55%. The percentages persist;
-the active preset does not.
+the active preset does not. Max remains fixed at 100%.
 
 An actual reading of `0 RPM` is valid when macOS has stopped an idle fan.
 System mode is displayed separately from automatic and manual modes.

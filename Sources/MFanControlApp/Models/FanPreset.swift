@@ -5,9 +5,10 @@ enum FanPreset: String, CaseIterable, Identifiable {
   case quiet
   case balanced
   case cool
+  case maximum
   case manual
 
-  static let visible: [FanPreset] = [.automatic, .quiet, .balanced, .cool]
+  static let visible: [FanPreset] = [.automatic, .quiet, .balanced, .cool, .maximum]
 
   var id: String { rawValue }
 
@@ -17,6 +18,7 @@ enum FanPreset: String, CaseIterable, Identifiable {
     case .quiet: "Quiet"
     case .balanced: "Balanced"
     case .cool: "Cool"
+    case .maximum: "Max"
     case .manual: "Manual"
     }
   }
@@ -27,6 +29,7 @@ enum FanPreset: String, CaseIterable, Identifiable {
     case .quiet: "leaf"
     case .balanced: "dial.medium"
     case .cool: "snowflake"
+    case .maximum: "fanblades.fill"
     case .manual: "slider.horizontal.3"
     }
   }

@@ -28,6 +28,7 @@ final class PresetStore: ObservableObject {
     case .quiet: quiet
     case .balanced: balanced
     case .cool: cool
+    case .maximum: 100
     }
   }
 
@@ -43,7 +44,7 @@ final class PresetStore: ObservableObject {
     case .cool:
       cool = value
       defaults.set(value, forKey: Key.cool)
-    case .automatic, .manual:
+    case .automatic, .maximum, .manual:
       break
     }
   }

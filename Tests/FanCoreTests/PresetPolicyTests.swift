@@ -18,6 +18,13 @@ final class PresetPolicyTests: XCTestCase {
     )
   }
 
+  func testOneHundredPercentReturnsExactReportedMaximum() throws {
+    XCTAssertEqual(
+      try PresetPolicy.target(minimum: 1_350, maximum: 5_349, percentage: 100),
+      5_349
+    )
+  }
+
   func testPresetRejectsPercentagesOutsideSafeBounds() {
     XCTAssertThrowsError(
       try PresetPolicy.target(minimum: 1_350, maximum: 5_349, percentage: 0)
