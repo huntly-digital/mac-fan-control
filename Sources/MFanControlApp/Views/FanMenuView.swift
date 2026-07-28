@@ -13,14 +13,13 @@ struct FanMenuView: View {
       header
       Divider()
 
-      if helperNeedsAttention {
+      switch contentPresentation {
+      case .helperSetup:
         HelperSetupView(store: helperStore)
-      } else if store.status == .notRunning {
-        HelperSetupView(store: helperStore)
-      } else if store.fans.isEmpty {
+      case .loadingFans:
         ProgressView("Reading fans…")
           .frame(maxWidth: .infinity, minHeight: 80)
-      } else {
+      case .controls:
         presetPicker
 
         VStack(spacing: 10) {
@@ -58,17 +57,26 @@ struct FanMenuView: View {
     }
     .padding(14)
     .frame(width: 336)
+    .fixedSize(horizontal: false, vertical: true)
     .task {
       await helperStore.refresh()
     }
   }
 
-  private var helperNeedsAttention: Bool {
+  private var contentPresentation: FanMenuContentPresentation {
+    FanMenuContentPresentation.resolve(
+      isFanClientConnected: store.isConnected,
+      helperPingConnected: helperPingConnected,
+      hasFans: !store.fans.isEmpty
+    )
+  }
+
+  private var helperPingConnected: Bool {
     switch helperStore.state {
     case .connected:
-      false
-    default:
       true
+    default:
+      false
     }
   }
 

@@ -20,6 +20,12 @@ test ! -d "$APP_BUNDLE/Contents/Library/LaunchDaemons"
 
 /usr/bin/plutil -lint "$APP_BUNDLE/Contents/Info.plist"
 /usr/bin/codesign --verify --strict --verbose=2 "$APP_BUNDLE"
+APP_TEAM="$(
+  /usr/bin/codesign -dvvv "$APP_BUNDLE" 2>&1 \
+    | /usr/bin/sed -n 's/^TeamIdentifier=//p'
+)"
+test -n "$APP_TEAM"
+test "$APP_TEAM" != "not set"
 test "$(
   /usr/libexec/PlistBuddy -c "Print :CFBundleIconFile" \
     "$APP_BUNDLE/Contents/Info.plist"
@@ -40,6 +46,13 @@ test -f "$DAEMON_PLIST"
 test -x "$POSTINSTALL"
 /usr/bin/plutil -lint "$DAEMON_PLIST"
 /usr/bin/codesign --verify --strict --verbose=2 "$HELPER"
+HELPER_TEAM="$(
+  /usr/bin/codesign -dvvv "$HELPER" 2>&1 \
+    | /usr/bin/sed -n 's/^TeamIdentifier=//p'
+)"
+test -n "$HELPER_TEAM"
+test "$HELPER_TEAM" != "not set"
+test "$APP_TEAM" = "$HELPER_TEAM"
 
 test "$(/usr/bin/stat -f "%Lp" "$HELPER")" = "755"
 test "$(/usr/bin/stat -f "%Lp" "$DAEMON_PLIST")" = "644"

@@ -7,7 +7,7 @@ PACKAGE_PATH="$PRODUCTS_DIR/MFanControlHelper.pkg"
 HELPER_INSTALL_PATH="Library/PrivilegedHelperTools/io.clover.mfancontrol.helper"
 PLIST_INSTALL_PATH="Library/LaunchDaemons/io.clover.mfancontrol.helper.plist"
 DEVELOPER_DIR_PATH="${DEVELOPER_DIR:-/Applications/Xcode-beta.app/Contents/Developer}"
-CODE_SIGN_IDENTITY="${CODE_SIGN_IDENTITY:--}"
+CODE_SIGN_IDENTITY="$("$ROOT_DIR/script/resolve_code_sign_identity.sh")"
 PACKAGE_VERSION="${PACKAGE_VERSION:-0.1.2}"
 
 BUILD_DIR="${BUILD_DIR:-$(

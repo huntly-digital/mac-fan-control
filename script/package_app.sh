@@ -10,7 +10,27 @@ CONTENTS_DIR="$APP_BUNDLE/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 DEVELOPER_DIR_PATH="${DEVELOPER_DIR:-/Applications/Xcode-beta.app/Contents/Developer}"
-CODE_SIGN_IDENTITY="${CODE_SIGN_IDENTITY:--}"
+CODE_SIGN_IDENTITY="$("$ROOT_DIR/script/resolve_code_sign_identity.sh")"
+
+set +e
+RUNNING_APP="$("/usr/bin/pgrep" -x "$APP_EXECUTABLE" 2>&1)"
+PGREP_STATUS=$?
+set -e
+case "$PGREP_STATUS" in
+  0)
+    echo "Refusing to replace $APP_BUNDLE while $APP_EXECUTABLE is running:" >&2
+    echo "$RUNNING_APP" >&2
+    echo "Quit MFanControl or use script/build_and_run.sh." >&2
+    exit 1
+    ;;
+  1)
+    ;;
+  *)
+    echo "Could not verify whether $APP_EXECUTABLE is running:" >&2
+    echo "$RUNNING_APP" >&2
+    exit 1
+    ;;
+esac
 
 BUILD_DIR="$(
   env \
@@ -36,10 +56,5 @@ BUILD_DIR="$BUILD_DIR" \
 cp "$PRODUCTS_DIR/MFanControlHelper.pkg" "$RESOURCES_DIR/MFanControlHelper.pkg"
 chmod 0755 "$MACOS_DIR/$APP_EXECUTABLE"
 
-codesign_args=(--force --sign "$CODE_SIGN_IDENTITY")
-if [[ "$CODE_SIGN_IDENTITY" == "-" ]]; then
-  codesign_args+=(--timestamp=none)
-fi
-
-/usr/bin/codesign "${codesign_args[@]}" "$APP_BUNDLE"
+/usr/bin/codesign --force --sign "$CODE_SIGN_IDENTITY" "$APP_BUNDLE"
 echo "$APP_BUNDLE"

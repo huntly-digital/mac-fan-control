@@ -139,9 +139,9 @@ Products/MFanControl.app
 
 ### Code signing
 
-Packaging uses ad-hoc signing by default. That is sufficient for inspecting
-the bundle and package structure, but the privileged XPC service requires an
-Apple Development Team signature.
+The privileged XPC service requires the app and helper to use the same Apple
+Development Team signature. Packaging refuses ad-hoc signing because an
+ad-hoc app cannot satisfy the helper's client requirement.
 
 List available identities:
 
@@ -149,11 +149,22 @@ List available identities:
 security find-identity -v -p codesigning
 ```
 
-Then build the app and helper with the same identity:
+When exactly one valid identity is available, the packaging scripts select it
+automatically for both artifacts:
+
+```sh
+make verify-app
+```
+
+When multiple identities are available, select one explicitly:
 
 ```sh
 CODE_SIGN_IDENTITY="Apple Development: Your Name (TEAMID)" make verify-app
 ```
+
+`make app` and `make verify-app` refuse to replace
+`Products/MFanControl.app` while it is running. Use
+`./script/build_and_run.sh` for the normal stop, rebuild, and relaunch cycle.
 
 The component package itself is unsigned because it is generated and used
 locally. A signed distribution package would require a Developer ID Installer
@@ -347,6 +358,9 @@ sudo launchctl print system/io.clover.mfancontrol.helper
 Rebuild the app and helper with the same Apple Development identity, run the
 Installer again, and select **Check Again**.
 
+`make verify-app` also verifies that the packaged app and helper have the same
+non-ad-hoc Team ID.
+
 ### Installer package is missing
 
 Rebuild the app:
@@ -354,6 +368,9 @@ Rebuild the app:
 ```sh
 make app
 ```
+
+Quit a running MFanControl instance first, or use
+`./script/build_and_run.sh`.
 
 The app expects the package at
 `Contents/Resources/MFanControlHelper.pkg`.
