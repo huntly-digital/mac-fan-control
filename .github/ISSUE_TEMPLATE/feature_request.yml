@@ -1,0 +1,59 @@
+name: Feature request
+description: Propose a focused improvement to MFanControl
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        MFanControl favors small, safety-preserving changes. Describe the problem before the proposed implementation.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user or contributor problem should be solved?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe the smallest useful observable result.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: true
+  - type: dropdown
+    id: hardware_scope
+    attributes:
+      label: Hardware scope
+      options:
+        - Hardware independent
+        - Mac15,7 / M3 Pro
+        - Another fan-equipped Apple Silicon model
+        - Unknown
+    validations:
+      required: true
+  - type: textarea
+    id: safety
+    attributes:
+      label: Safety impact
+      description: Explain any effect on SMC access, privilege, RPM policy, recovery, or hardware validation.
+    validations:
+      required: true
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Project constraints
+      options:
+        - label: This proposal does not require arbitrary SMC access through UI or IPC.
+          required: true
+        - label: This proposal does not require official prebuilt binaries.
+          required: true
+        - label: I have reviewed the project non-goals in README.md.
+          required: true

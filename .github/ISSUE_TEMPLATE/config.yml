@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/huntly-digital/mac-fan-control/security/advisories/new
+    about: Report privilege, signing, unsafe recovery, or sensitive hardware-control issues privately.
+  - name: Support guide
+    url: https://github.com/huntly-digital/mac-fan-control/blob/main/SUPPORT.md
+    about: Review supported questions and privacy-safe diagnostic guidance.

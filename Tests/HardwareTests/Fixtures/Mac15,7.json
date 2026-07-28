@@ -1,0 +1,32 @@
+{
+  "capturedOn": "2026-07-27",
+  "hardware": {
+    "model": "Mac15,7",
+    "processor": "Apple M3 Pro",
+    "fanCount": 2,
+    "modeKeyFormat": "F%dMd",
+    "hasFtst": true,
+    "strategy": "directThenFtst",
+    "support": "experimental"
+  },
+  "knownKeys": [
+    {
+      "key": "F0Md",
+      "dataType": "ui8 "
+    },
+    {
+      "key": "F1Md",
+      "dataType": "ui8 "
+    },
+    {
+      "key": "Ftst",
+      "dataType": "ui8 "
+    }
+  ],
+  "writeValidation": "notRun",
+  "notes": [
+    "Captured by the read-only probe without root.",
+    "Macs Fan Control was active during capture, so volatile key values are intentionally omitted.",
+    "Do not mark this fixture verified before the documented manual safety gate passes."
+  ]
+}

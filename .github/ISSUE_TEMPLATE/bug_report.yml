@@ -1,0 +1,104 @@
+name: Bug report
+description: Report a reproducible MFanControl problem
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for the report. Return all fans to Auto before collecting diagnostics.
+        Do not include serial numbers, hardware UUIDs, account names, signing keys, or unrelated SMC values.
+        Report security-sensitive or unsafe hardware-control behavior privately through SECURITY.md.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Build or SwiftPM
+        - App UI
+        - Helper installation
+        - XPC connection
+        - Fan telemetry
+        - Temperature telemetry
+        - Presets or manual control
+        - Read-only probe
+        - Packaging or signing
+        - Tests
+        - Documentation
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: Commit or app version
+      placeholder: "Commit SHA or 0.2.0"
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: "Version and build number"
+    validations:
+      required: true
+  - type: input
+    id: hardware
+    attributes:
+      label: Hardware model
+      description: Use only the model identifier and processor family. Do not include a serial number.
+      placeholder: "Mac15,7 / M3 Pro"
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. Build with ...
+        2. Open ...
+        3. Select ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs
+      description: Remove direct identifiers and secrets. Use a fenced code block.
+      render: shell
+  - type: dropdown
+    id: helper
+    attributes:
+      label: Helper state
+      options:
+        - Not installed
+        - Waiting for Installer
+        - Connected
+        - Update required
+        - Unavailable
+        - Not applicable
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety confirmation
+      options:
+        - label: I returned all fans to Auto before filing this report, or no manual control was active.
+          required: true
+        - label: I removed serial numbers, UUIDs, account names, credentials, and signing secrets.
+          required: true
+        - label: This report does not disclose a security vulnerability or unpublished dangerous SMC write sequence.
+          required: true

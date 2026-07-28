@@ -1,0 +1,18 @@
+.build/
+Products/
+.swiftpm/
+DerivedData/
+.DS_Store
+.codegraph/
+.codex/
+.superpowers/
+.cursor/
+.idea/
+xcuserdata/
+*.xcuserstate
+*.sock
+
+# Generated from Resources/AppIcon/AppIcon-1024.png.
+Resources/AppIcon.icns
+Resources/Assets.car
+Resources/AppIcon/AppIcon.iconset/

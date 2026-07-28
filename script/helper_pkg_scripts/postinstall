@@ -1,0 +1,27 @@
+#!/bin/bash
+set -eu
+
+HELPER_PATH="/Library/PrivilegedHelperTools/io.clover.mfancontrol.helper"
+PLIST_PATH="/Library/LaunchDaemons/io.clover.mfancontrol.helper.plist"
+SERVICE_TARGET="system/io.clover.mfancontrol.helper"
+
+/usr/sbin/chown root:wheel "$HELPER_PATH" "$PLIST_PATH"
+/bin/chmod 0755 "$HELPER_PATH"
+/bin/chmod 0644 "$PLIST_PATH"
+
+/bin/launchctl bootout "$SERVICE_TARGET" >/dev/null 2>&1 || true
+
+attempt=0
+while [ "$attempt" -lt 10 ]; do
+  if /bin/launchctl print "$SERVICE_TARGET" >/dev/null 2>&1; then
+    exit 0
+  fi
+  if /bin/launchctl bootstrap system "$PLIST_PATH" >/dev/null 2>&1; then
+    exit 0
+  fi
+  attempt=$((attempt + 1))
+  /bin/sleep 1
+done
+
+echo "Could not bootstrap $SERVICE_TARGET after 10 attempts" >&2
+exit 1
