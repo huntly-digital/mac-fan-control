@@ -6,23 +6,31 @@ public enum ProtocolError: Error, Equatable, Sendable {
 }
 
 public enum JSONLineCodec {
-  public static let maximumMessageBytes = 4_096
+  public static let maximumRequestBytes = 4_096
+  public static let maximumMessageBytes = 32_768
 
-  public static func encode<T: Encodable>(_ value: T) throws -> Data {
+  public static func encode<T: Encodable>(
+    _ value: T,
+    maximumBytes: Int = maximumMessageBytes
+  ) throws -> Data {
     var data = try JSONEncoder().encode(value)
-    guard data.count <= maximumMessageBytes else {
+    guard data.count <= maximumBytes else {
       throw ProtocolError.messageTooLarge
     }
     data.append(0x0A)
     return data
   }
 
-  public static func decode<T: Decodable>(_ type: T.Type, from framedData: Data) throws -> T {
+  public static func decode<T: Decodable>(
+    _ type: T.Type,
+    from framedData: Data,
+    maximumBytes: Int = maximumMessageBytes
+  ) throws -> T {
     var data = framedData
     if data.last == 0x0A {
       data.removeLast()
     }
-    guard data.count <= maximumMessageBytes else {
+    guard data.count <= maximumBytes else {
       throw ProtocolError.messageTooLarge
     }
     do {

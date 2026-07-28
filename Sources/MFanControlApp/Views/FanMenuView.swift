@@ -43,6 +43,16 @@ struct FanMenuView: View {
           Label("Manual control", systemImage: "slider.horizontal.3")
             .font(.subheadline.weight(.medium))
         }
+        .disabled(!store.hasControl || store.isApplying)
+      }
+
+      if !store.hasControl, store.isConnected {
+        Label(
+          "Read-only: another MFanControl instance owns fan control.",
+          systemImage: "lock"
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
       }
 
       if let error = store.errorMessage {
@@ -99,12 +109,12 @@ struct FanMenuView: View {
 
       Spacer(minLength: 8)
 
-      if let temperature = store.temperature {
+      if let temperature = store.primaryTemperature {
         VStack(alignment: .trailing, spacing: 0) {
-          Text("\(Int(temperature.cpuMaximumCelsius.rounded()))°")
+          Text("\(Int(temperature.celsius.rounded()))°")
             .font(.title2.weight(.semibold))
             .monospacedDigit()
-          Text(temperature.primarySensorName)
+          Text(temperature.label)
             .font(.caption2)
             .foregroundStyle(.secondary)
         }
@@ -163,7 +173,7 @@ struct FanMenuView: View {
               lineWidth: 1
             )
         }
-        .disabled(!store.isConnected || store.isApplying)
+        .disabled(!store.isConnected || !store.hasControl || store.isApplying)
       }
     }
   }

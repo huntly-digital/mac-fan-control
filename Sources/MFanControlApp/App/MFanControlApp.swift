@@ -39,7 +39,7 @@ private struct MenuBarLabel: View {
       Image(systemName: "fanblades")
       if let title = MenuBarTemperaturePresentation.title(
         isEnabled: showTemperature,
-        celsius: store.temperature?.cpuMaximumCelsius
+        celsius: store.primaryTemperature?.celsius
       ) {
         Text(title)
           .monospacedDigit()
@@ -51,7 +51,7 @@ private struct MenuBarLabel: View {
   private var accessibilityLabel: String {
     if let title = MenuBarTemperaturePresentation.title(
       isEnabled: showTemperature,
-      celsius: store.temperature?.cpuMaximumCelsius
+      celsius: store.primaryTemperature?.celsius
     ) {
       return "MFanControl, \(title)"
     }

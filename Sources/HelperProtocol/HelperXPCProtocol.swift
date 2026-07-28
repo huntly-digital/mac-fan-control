@@ -3,7 +3,7 @@ import Foundation
 public enum HelperServiceDescriptor {
   public static let machServiceName = "io.clover.mfancontrol.helper"
   public static let daemonPlistName = "io.clover.mfancontrol.helper.plist"
-  public static let protocolVersion = "3"
+  public static let protocolVersion = "4"
 }
 
 public enum HelperXPCError {

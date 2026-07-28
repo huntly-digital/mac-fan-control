@@ -20,7 +20,10 @@ actor UnixSocketClient {
   func request(_ request: FanRequest) throws -> FanResponse {
     do {
       try connectIfNeeded()
-      let data = try JSONLineCodec.encode(request)
+      let data = try JSONLineCodec.encode(
+        request,
+        maximumBytes: JSONLineCodec.maximumRequestBytes
+      )
       guard writeAll(data) else { throw ControlError.daemonUnavailable }
       let frame = try readFrame()
       let response = try JSONLineCodec.decode(FanResponse.self, from: frame)

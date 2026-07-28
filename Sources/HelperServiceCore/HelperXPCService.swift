@@ -5,14 +5,19 @@ import FanDaemonCore
 import FanProtocol
 import Foundation
 import HelperProtocol
+import IOKit.ps
 import Security
 
 public final class HelperXPCService: NSObject, HelperXPCProtocol, @unchecked Sendable {
   public typealias RequestHandler = @Sendable (FanRequest) async -> FanResponse
   public typealias DisconnectHandler = @Sendable () async -> Void
+  public typealias SessionRequestHandler =
+    @Sendable (FanRequest, UUID) async -> FanResponse
+  public typealias SessionDisconnectHandler = @Sendable (UUID) async -> Void
 
-  private let handler: RequestHandler
-  private let disconnectHandler: DisconnectHandler
+  private let handler: SessionRequestHandler
+  private let disconnectHandler: SessionDisconnectHandler
+  private let sessionID = UUID()
   private let sessionLock = NSLock()
   private var fanSessionStarted = false
 
@@ -20,8 +25,16 @@ public final class HelperXPCService: NSObject, HelperXPCProtocol, @unchecked Sen
     handler: @escaping RequestHandler,
     disconnectHandler: @escaping DisconnectHandler = {}
   ) {
-    self.handler = handler
-    self.disconnectHandler = disconnectHandler
+    self.handler = { request, _ in await handler(request) }
+    self.disconnectHandler = { _ in await disconnectHandler() }
+  }
+
+  public init(
+    sessionHandler: @escaping SessionRequestHandler,
+    sessionDisconnectHandler: @escaping SessionDisconnectHandler = { _ in }
+  ) {
+    self.handler = sessionHandler
+    self.disconnectHandler = sessionDisconnectHandler
   }
 
   public func ping(withReply reply: @escaping (String) -> Void) {
@@ -35,7 +48,11 @@ public final class HelperXPCService: NSObject, HelperXPCProtocol, @unchecked Sen
     let replyBox = HelperXPCReplyBox(reply)
     let request: FanRequest
     do {
-      request = try JSONLineCodec.decode(FanRequest.self, from: requestData)
+      request = try JSONLineCodec.decode(
+        FanRequest.self,
+        from: requestData,
+        maximumBytes: JSONLineCodec.maximumRequestBytes
+      )
     } catch {
       replyBox.call(nil, Self.xpcError(error.localizedDescription))
       return
@@ -48,7 +65,7 @@ public final class HelperXPCService: NSObject, HelperXPCProtocol, @unchecked Sen
     }
 
     Task {
-      let response = await handler(request)
+      let response = await handler(request, sessionID)
       do {
         replyBox.call(try JSONLineCodec.encode(response), nil)
       } catch {
@@ -65,7 +82,7 @@ public final class HelperXPCService: NSObject, HelperXPCProtocol, @unchecked Sen
     }
     guard shouldHandleDisconnect else { return }
     Task {
-      await disconnectHandler()
+      await disconnectHandler(sessionID)
     }
   }
 
@@ -195,11 +212,11 @@ private final class PrivilegedFanRuntime: @unchecked Sendable {
 
   func makeService() -> HelperXPCService {
     HelperXPCService(
-      handler: { [processor] request in
-        await processor.handle(request).response
+      sessionHandler: { [processor] request, sessionID in
+        await processor.handle(request, sessionID: sessionID).response
       },
-      disconnectHandler: { [processor] in
-        await processor.handleDisconnect()
+      sessionDisconnectHandler: { [processor] sessionID in
+        await processor.handleDisconnect(sessionID: sessionID)
       }
     )
   }
@@ -210,12 +227,14 @@ private final class HelperSafetyLifecycle: @unchecked Sendable {
   private var tickTask: Task<Void, Never>?
   private var signalSources: [DispatchSourceSignal] = []
   private var observers: [(NotificationCenter, NSObjectProtocol)] = []
+  private var powerSourceRunLoopSource: CFRunLoopSource?
 
   init(processor: RequestProcessor) {
     self.processor = processor
     installTick()
     installSignals()
     installSystemObservers()
+    installPowerSourceObserver()
   }
 
   deinit {
@@ -223,6 +242,9 @@ private final class HelperSafetyLifecycle: @unchecked Sendable {
     signalSources.forEach { $0.cancel() }
     observers.forEach { center, token in
       center.removeObserver(token)
+    }
+    if let powerSourceRunLoopSource {
+      CFRunLoopRemoveSource(CFRunLoopGetMain(), powerSourceRunLoopSource, .defaultMode)
     }
   }
 
@@ -288,5 +310,24 @@ private final class HelperSafetyLifecycle: @unchecked Sendable {
       (workspaceCenter, wakeObserver),
       (NotificationCenter.default, thermalObserver),
     ]
+  }
+
+  private func installPowerSourceObserver() {
+    let context = Unmanaged.passUnretained(self).toOpaque()
+    guard let unmanaged = IOPSNotificationCreateRunLoopSource(
+      { context in
+        guard let context else { return }
+        let lifecycle = Unmanaged<HelperSafetyLifecycle>
+          .fromOpaque(context)
+          .takeUnretainedValue()
+        Task { await lifecycle.processor.handlePowerSourceChanged() }
+      },
+      context
+    ) else {
+      return
+    }
+    let source = unmanaged.takeRetainedValue()
+    powerSourceRunLoopSource = source
+    CFRunLoopAddSource(CFRunLoopGetMain(), source, .defaultMode)
   }
 }

@@ -21,13 +21,26 @@ public struct HelperFanClient: Sendable {
 
   public func request(
     _ request: FanRequest,
-    timeout: Duration = .seconds(3)
+    timeout: Duration? = nil
   ) async throws -> FanResponse {
-    let response = try await operation(request, timeout)
+    let response = try await operation(request, timeout ?? Self.timeout(for: request.command))
     guard response.id == request.id else {
       throw ControlError.malformedRequest
     }
     return response
+  }
+
+  public static func timeout(for command: FanCommand) -> Duration {
+    switch command {
+    case .hello, .status, .heartbeat:
+      return .seconds(3)
+    case .setManual:
+      return .seconds(30)
+    case .setAutomatic, .setAllAutomatic, .shutdown:
+      return .seconds(30)
+    case .setPreset, .validateHardware:
+      return .seconds(240)
+    }
   }
 }
 
@@ -36,7 +49,10 @@ private final class HelperFanXPCSession: @unchecked Sendable {
   private var connection: NSXPCConnection?
 
   func request(_ request: FanRequest, timeout: Duration) async throws -> FanResponse {
-    let requestData = try JSONLineCodec.encode(request)
+    let requestData = try JSONLineCodec.encode(
+      request,
+      maximumBytes: JSONLineCodec.maximumRequestBytes
+    )
     let connection = connectionForRequest()
 
     return try await withCheckedThrowingContinuation { continuation in

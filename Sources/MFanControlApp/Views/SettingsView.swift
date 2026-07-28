@@ -15,7 +15,7 @@ struct SettingsView: View {
       SensorSettingsView(store: store)
         .tabItem { Label("Sensors", systemImage: "thermometer.medium") }
 
-      HelperSettingsView(store: helperStore)
+      HelperSettingsView(helperStore: helperStore, fanStore: store)
         .tabItem { Label("Helper", systemImage: "shield") }
 
       GeneralSettingsView()
@@ -101,12 +101,34 @@ private struct SensorSettingsView: View {
   var body: some View {
     Form {
       Section("Temperature sensors") {
-        sensorRow(
-          name: store.temperature?.primarySensorName ?? "CPU Max",
-          value: store.temperature?.cpuMaximumCelsius
-        )
-        sensorRow(name: "GPU", value: store.temperature?.gpuCelsius)
-        sensorRow(name: "Battery", value: store.temperature?.batteryCelsius)
+        Picker("Menu bar temperature", selection: $store.primaryTemperatureID) {
+          Text("CPU Hotspot").tag("cpu.hotspot")
+          Text("CPU Average").tag("cpu.average")
+        }
+        sensorRow(readingID: "cpu.average", fallbackName: "CPU Average")
+        sensorRow(readingID: "cpu.hotspot", fallbackName: "CPU Hotspot")
+        sensorRow(readingID: "gpu.average", fallbackName: "GPU Average")
+        sensorRow(readingID: "gpu.hotspot", fallbackName: "GPU Hotspot")
+        sensorRow(readingID: "battery.temperature", fallbackName: "Battery")
+      }
+      if let diagnostics = store.temperature?.readings.filter({ $0.role == .individual }),
+        !diagnostics.isEmpty
+      {
+        Section("Diagnostics") {
+          DisclosureGroup("Individual allowlisted sensors") {
+            ForEach(diagnostics) { reading in
+              LabeledContent(reading.label) {
+                VStack(alignment: .trailing, spacing: 1) {
+                  Text("\(Int(reading.celsius.rounded()))°C")
+                    .monospacedDigit()
+                  Text(reading.sourceKeys.joined(separator: ", "))
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+                }
+              }
+            }
+          }
+        }
       }
       Section {
         Text("Only model-validated SMC keys are read. Unknown sensors stay unavailable.")
@@ -117,10 +139,11 @@ private struct SensorSettingsView: View {
     .formStyle(.grouped)
   }
 
-  private func sensorRow(name: String, value: Double?) -> some View {
-    LabeledContent(name) {
-      if let value {
-        Text("\(Int(value.rounded()))°C")
+  private func sensorRow(readingID: String, fallbackName: String) -> some View {
+    let reading = store.temperature?.readings.first { $0.id == readingID }
+    return LabeledContent(reading?.label ?? fallbackName) {
+      if let reading {
+        Text("\(Int(reading.celsius.rounded()))°C")
           .monospacedDigit()
       } else {
         Text("Unavailable")
@@ -131,21 +154,64 @@ private struct SensorSettingsView: View {
 }
 
 private struct HelperSettingsView: View {
-  @ObservedObject var store: HelperStore
+  @ObservedObject var helperStore: HelperStore
+  @ObservedObject var fanStore: FanStore
+  @State private var confirmingValidation = false
 
   var body: some View {
     Form {
       Section("Privileged helper") {
-        HelperSetupView(store: store)
+        HelperSetupView(store: helperStore)
+      }
+      if let hardware = fanStore.hardware {
+        let presentation = HardwareValidationPresentation.resolve(
+          eligibility: hardware.writeEligibility,
+          controlAccess: fanStore.controlAccess
+        )
+        Section("Hardware validation") {
+          LabeledContent("Status", value: presentation.title)
+          LabeledContent("Fingerprint") {
+            Text(String(hardware.capabilityFingerprint.prefix(23)) + "…")
+              .font(.caption.monospaced())
+              .textSelection(.enabled)
+          }
+          Text(presentation.message)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+          if let validation = fanStore.validation {
+            ProgressView(
+              value: Double(validation.completedFans),
+              total: Double(max(validation.totalFans, 1))
+            )
+            Text(validation.message)
+              .font(.caption)
+          }
+          if presentation.canValidate {
+            Button("Validate Hardware…") {
+              confirmingValidation = true
+            }
+            .disabled(fanStore.isApplying)
+          }
+        }
       }
       Section {
         Button("Check Connection") {
-          Task { await store.refresh() }
+          Task { await helperStore.refresh() }
         }
       }
     }
     .formStyle(.grouped)
-    .task { await store.refresh() }
+    .task { await helperStore.refresh() }
+    .alert("Validate Apple Silicon fan control?", isPresented: $confirmingValidation) {
+      Button("Cancel", role: .cancel) {}
+      Button("Validate") {
+        fanStore.validateHardware()
+      }
+    } message: {
+      Text(
+        "Each fan will briefly run at its baseline minimum plus 500 RPM, then return to Auto. Stop using the Mac if fan behavior is unexpected."
+      )
+    }
   }
 }
 
@@ -155,7 +221,7 @@ private struct GeneralSettingsView: View {
   var body: some View {
     Form {
       Section("Menu bar") {
-        Toggle("Show CPU temperature", isOn: $showTemperatureInMenuBar)
+        Toggle("Show selected CPU temperature", isOn: $showTemperatureInMenuBar)
       }
       Section("Safety") {
         Label("Return all fans to Auto when the helper disconnects", systemImage: "checkmark.shield")

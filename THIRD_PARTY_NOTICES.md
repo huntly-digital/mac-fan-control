@@ -1,7 +1,8 @@
 # Third-party notices
 
-The AppleSMC ABI layout, SMC data formats, fan-key discovery, and documented
-`Ftst` fallback behavior were independently implemented with reference to:
+The AppleSMC ABI layout, SMC data formats, fan-key discovery, documented
+`Ftst` fallback behavior, and generation-specific Apple Silicon temperature
+sensor catalog were independently implemented with reference to:
 
 - **macos-smc-fan** by Alexander Goodkind
 - <https://github.com/agoodkind/macos-smc-fan>
@@ -29,3 +30,10 @@ The complete MIT permission and warranty notice from that project is:
 > SOFTWARE.
 
 This project is not affiliated with or endorsed by Apple Inc.
+
+## Behavioral reference
+
+[smcFanControl](https://github.com/wolffcatskyy/smcFanControl) is cited only as
+a behavioral reference for temporary fan minimum-floor control. It is licensed
+under GPL-2.0 and targets Intel Macs. MFanControl does not contain copied,
+translated, or structurally derived smcFanControl implementation code.

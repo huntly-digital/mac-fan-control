@@ -17,7 +17,7 @@ struct HelperXPCServiceTests {
       receivedVersion = version
     }
 
-    #expect(receivedVersion == "3")
+    #expect(receivedVersion == "4")
   }
 
   @Test("forwards a bounded fan request and encodes its response")

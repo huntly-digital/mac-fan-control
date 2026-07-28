@@ -24,4 +24,12 @@ struct HelperFanClientTests {
       try await client.request(FanRequest(id: "expected", command: .status))
     }
   }
+
+  @Test("long-running writes outlive the ten-second engine verification window")
+  func commandSpecificTimeouts() {
+    #expect(HelperFanClient.timeout(for: .status) == .seconds(3))
+    #expect(HelperFanClient.timeout(for: .setManual) == .seconds(30))
+    #expect(HelperFanClient.timeout(for: .setPreset) == .seconds(240))
+    #expect(HelperFanClient.timeout(for: .validateHardware) == .seconds(240))
+  }
 }

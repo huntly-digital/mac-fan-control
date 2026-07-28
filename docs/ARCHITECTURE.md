@@ -12,7 +12,8 @@ The main boundaries are:
 1. The app owns presentation and user intent.
 2. Shared protocol types define the complete command surface.
 3. The privileged helper owns control and recovery.
-4. `FanCore` owns policy and model-aware fan behavior.
+4. `FanCore` owns policy, capability approval, recovery, and model-aware fan
+   behavior.
 5. `SMCBridge` owns the minimal AppleSMC transport and typed codecs.
 
 ## Runtime control flow
@@ -33,11 +34,11 @@ MFanControlApp
   HelperXPCService
             |
             v
-  RequestProcessor
+  SessionCoordinator / RequestProcessor
   SafetyStateMachine
             |
             v
-  FanController
+  FanController -> AppleSiliconFanEngine
             |
             v
   SMCBridge -> AppleSMC user client
@@ -45,7 +46,8 @@ MFanControlApp
 
 The app polls status once per second and sends a heartbeat every two seconds
 while connected. The helper safety timer evaluates heartbeat expiry every
-second.
+second. Each XPC connection has an internal session UUID; one healthy session
+owns the write lease while observers retain read-only telemetry.
 
 ## Package targets
 
@@ -56,7 +58,7 @@ second.
 | `HelperProtocol` | Objective-C-compatible XPC interface and service identifiers |
 | `HelperServiceCore` | Privileged XPC endpoint, client signing requirement, lifecycle and safety hooks |
 | `HelperManagement` | App-side helper installation state, ping client, and persistent fan-request XPC client |
-| `FanCore` | Hardware discovery, RPM/preset policy, fan control, probe, and safety state machine |
+| `FanCore` | Hardware capability discovery, approvals, recovery journal, RPM/preset policy, stateful fan engine, sensor registry, probe, and safety state machine |
 | `FanDaemonCore` | Request processing, development Unix-socket server, and peer UID policy |
 | `fancontrold` | Read-only probe, development daemon, and privileged Mach-service entry point |
 | `MFanControlApp` | SwiftUI menu-bar UI, settings, stores, and presentation logic |
@@ -75,13 +77,15 @@ The allowed commands are:
 - `setAllAutomatic`
 - `heartbeat`
 - `shutdown`
+- `validateHardware`
 
 `FanRequest` contains only a request identifier, command, optional fan index,
-optional RPM, and optional preset percentage. It cannot carry an SMC key,
-data type, raw bytes, file path, or shell command.
+optional RPM, optional preset percentage, and explicit validation confirmation.
+It cannot carry an SMC key, data type, raw bytes, file path, or shell command.
 
 `HelperXPCProtocol.performFanRequest` accepts `Data`, but both sides encode and
-decode it with `JSONLineCodec`. The codec rejects payloads larger than 4 KiB.
+decode it with `JSONLineCodec`. Requests are limited to 4 KiB. Telemetry
+responses, including bounded sensor diagnostics, are limited to 32 KiB.
 
 The XPC listener applies a code-signing requirement containing:
 
@@ -109,15 +113,16 @@ standard macOS Installer after an explicit user action.
 The app considers the helper connected only when:
 
 1. the installed helper path is executable; and
-2. an XPC ping returns the expected protocol version.
+2. an XPC ping returns protocol version 4.
 
-Reinstalling the local package replaces the helper and reloads the same launchd
-label.
+Protocol version 3 is incompatible. Reinstalling the local package replaces the
+helper and reloads the same launchd label.
 
 ## Request processing and recovery
 
 `RequestProcessor` is the only component that translates protocol commands into
-`FanControlling` calls.
+`FanControlling` calls. It receives the internal connection session ID from the
+XPC service; session IDs are never part of public IPC.
 
 - Status commands return hardware, fan, and optional temperature snapshots.
 - Manual and preset commands are rejected during serious or critical thermal
@@ -127,30 +132,51 @@ label.
 - Disconnect, heartbeat timeout, sleep, thermal emergency, and shutdown are
   routed through the shared `SafetyStateMachine`.
 
-The XPC service marks a fan session after `hello`. Connection invalidation then
-invokes the same disconnect recovery path.
+The first healthy `hello` owns the write lease. Other accepted signed clients
+are observers and receive `controllerBusy` for write and validation commands.
+Owner invalidation invokes the shared full-restoration path and releases the
+lease.
 
 ## Hardware discovery and SMC access
 
-`HardwareProfiler` reads only the fan count and known mode-key candidates. It
-selects:
+`HardwareProfiler` reads only the fan count and known fan/key candidates. For
+every detected fan it profiles `Ac`, `Tg`, `Mn`, `Mx`, the selected mode key,
+their data types, and the reported range. It selects:
 
 - `F%dMd` when `F0Md` exists;
 - `F%dmd` when `F0md` exists;
 - unsupported when neither exists.
 
-`Ftst` presence selects the bounded direct-then-fallback strategy. A discovered
-mode key is still marked experimental; discovery alone never verifies a model.
+`Ftst` presence selects the bounded direct-then-fallback strategy. A
+deterministic capability fingerprint covers model, fan count, keys, types,
+ranges, and strategy. Discovery alone never grants write eligibility.
 
-`FanController` exposes typed operations:
+`FanController` exposes typed operations and delegates write transitions to
+`AppleSiliconFanEngine`:
 
 - discover hardware;
 - read fan and temperature snapshots;
 - produce a read-only probe;
 - set one fan to a bounded manual target;
 - restore one or all fans to Auto.
+- validate hardware after explicit confirmation.
 
 Raw key writes remain internal to the controller and transport package.
+
+Before the first temporary floor write, the engine captures baseline minima and
+atomically persists a root-owned `0600` recovery journal. Startup restores only
+a fingerprint-matching journal. Approval is stored separately and is keyed by
+the exact model, macOS build, and fingerprint. Neither store contains a serial
+number or manual target to reapply.
+
+## Temperature registry
+
+The sensor registry selects generation-specific allowlists for Mac12 through
+Mac17 plus validated cross-platform keys. It never enumerates AppleSMC keys.
+Invalid, malformed, unsupported, or out-of-range samples are discarded.
+Derived CPU/GPU Average and Hotspot values reference the exact source-key
+sample. The app stores only the selected stable metric ID; Hotspot remains the
+default and display fallback.
 
 ## Read-only probe
 
@@ -179,7 +205,8 @@ The packaged app uses privileged XPC, not this socket.
 
 ## App state
 
-- `FanStore` owns connection, fan/temperature snapshots, current UI preset, and
+- `FanStore` owns connection, fan/temperature snapshots, validation and lease
+  presentation, primary-temperature preference, current UI preset, and
   heartbeat tasks.
 - `PresetStore` persists Quiet, Balanced, and Cool percentages.
 - `HelperStore` owns installation and XPC availability state.

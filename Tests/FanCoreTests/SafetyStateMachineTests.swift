@@ -36,4 +36,14 @@ final class SafetyStateMachineTests: XCTestCase {
     XCTAssertEqual(machine.handle(.systemDidWake), .none)
     XCTAssertEqual(machine.state, .automatic)
   }
+
+  func testManualHeartbeatHealthExpiresAtConfiguredBoundary() {
+    let start = Date(timeIntervalSince1970: 100)
+    var machine = SafetyStateMachine(heartbeatTimeout: 5)
+    machine.handle(.clientConnected(at: start))
+    machine.handle(.manualActivated(at: start))
+
+    XCTAssertTrue(machine.isHeartbeatHealthy(at: start.addingTimeInterval(5)))
+    XCTAssertFalse(machine.isHeartbeatHealthy(at: start.addingTimeInterval(5.01)))
+  }
 }

@@ -36,12 +36,19 @@ public struct SafetyStateMachine: Sendable {
     self.heartbeatTimeout = heartbeatTimeout
   }
 
+  public func isHeartbeatHealthy(at date: Date) -> Bool {
+    guard state == .manual, let lastHeartbeat else { return false }
+    return date.timeIntervalSince(lastHeartbeat) <= heartbeatTimeout
+  }
+
   @discardableResult
   public mutating func handle(_ event: SafetyEvent) -> SafetyAction {
     switch event {
     case .clientConnected(let date):
       lastHeartbeat = date
-      state = .connected
+      if state != .manual {
+        state = .connected
+      }
     case .manualActivated(let date), .heartbeat(let date):
       lastHeartbeat = date
       if case .manualActivated = event {

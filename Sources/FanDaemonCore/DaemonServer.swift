@@ -162,11 +162,15 @@ public final class DaemonServer: @unchecked Sendable {
       while let newline = buffer.firstIndex(of: 0x0A) {
         let frame = Data(buffer[...newline])
         buffer.removeSubrange(...newline)
-        guard frame.count <= JSONLineCodec.maximumMessageBytes + 1 else { return }
+        guard frame.count <= JSONLineCodec.maximumRequestBytes + 1 else { return }
 
         let result: DaemonResult
         do {
-          let request = try JSONLineCodec.decode(FanRequest.self, from: frame)
+          let request = try JSONLineCodec.decode(
+            FanRequest.self,
+            from: frame,
+            maximumBytes: JSONLineCodec.maximumRequestBytes
+          )
           result = await processor.handle(request)
         } catch {
           result = DaemonResult(
@@ -189,7 +193,7 @@ public final class DaemonServer: @unchecked Sendable {
         }
       }
 
-      if buffer.count > JSONLineCodec.maximumMessageBytes {
+      if buffer.count > JSONLineCodec.maximumRequestBytes {
         return
       }
     }

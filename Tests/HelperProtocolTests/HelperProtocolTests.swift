@@ -9,8 +9,8 @@ struct HelperProtocolTests {
     #expect(HelperServiceDescriptor.daemonPlistName == "io.clover.mfancontrol.helper.plist")
   }
 
-  @Test("fan request transport uses protocol version three")
+  @Test("fan request transport uses protocol version four")
   func fanRequestProtocolVersion() {
-    #expect(HelperServiceDescriptor.protocolVersion == "3")
+    #expect(HelperServiceDescriptor.protocolVersion == "4")
   }
 }

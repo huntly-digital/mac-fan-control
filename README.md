@@ -43,15 +43,20 @@ Software tests passing does not make a hardware profile verified.
 
 ## What it currently provides
 
-- A compact SwiftUI `MenuBarExtra` with CPU maximum temperature.
-- Per-fan actual, target, minimum, and maximum RPM telemetry.
+- A compact SwiftUI `MenuBarExtra` with selectable CPU Hotspot or CPU Average.
+- Per-fan actual, target, captured baseline minimum, effective floor, and
+  maximum RPM telemetry.
 - Auto, Quiet, Balanced, Cool, and Max fixed-RPM presets.
 - Manual per-fan RPM controls behind a disclosure.
 - Editable preset percentages and sensor/helper settings.
 - A privileged launchd helper installed through the standard macOS Installer.
 - A typed, bounded XPC request channel between the app and helper.
-- A read-only hardware probe limited to known fan-control keys.
-- Automatic recovery to macOS control after the documented safety events.
+- A single-owner control lease; additional signed app instances remain
+  read-only.
+- A read-only capability probe limited to known fan-control keys.
+- Explicit model/build/fingerprint hardware validation before the first write.
+- A crash-recovery journal that restores Auto and captured minimum floors.
+- An allowlisted Mac12–Mac17 temperature registry with individual diagnostics.
 - Unit tests for SMC codecs, protocol boundaries, helper lifecycle, policy,
   control, and safety transitions.
 
@@ -69,29 +74,35 @@ Software tests passing does not make a hardware profile verified.
 MFanControl keeps the writable surface deliberately narrow:
 
 - The app can send only `hello`, `status`, `setManual`, `setPreset`,
-  `setAutomatic`, `setAllAutomatic`, `heartbeat`, and `shutdown`.
-- Requests and responses use the shared bounded codec; payloads are limited to
-  4 KiB.
+  `setAutomatic`, `setAllAutomatic`, `validateHardware`, `heartbeat`, and
+  `shutdown`.
+- Requests use a 4 KiB bounded envelope. Telemetry responses are capped at
+  32 KiB so the allowlisted diagnostics registry remains bounded.
 - The privileged XPC service requires the app bundle identifier
   `io.clover.mfancontrol`, an Apple-trusted signature, and the same Team ID as
   the helper.
-- RPM targets must be nonzero and inside the current SMC-reported minimum and
-  maximum.
-- Manual-mode writes and target RPM are verified by readback.
+- Writes require explicit approval for the exact model, macOS build, and
+  deterministic capability fingerprint.
+- RPM targets must be nonzero and inside the captured baseline minimum and
+  current SMC-reported maximum.
+- The temporary minimum floor, manual mode, target, and actual RPM are verified
+  by readback.
 - If direct M3/M4 mode control is rejected, the documented `Ftst` fallback is
   bounded by time and retries.
 - Preset application is transactional: a partial failure returns every fan to
   Auto.
 - Disconnect, heartbeat loss over five seconds, sleep, serious or critical
-  thermal pressure, `SIGINT`, `SIGTERM`, and orderly shutdown return all fans
-  to Auto.
+  thermal pressure, repeated power-source drift, `SIGINT`, `SIGTERM`, and
+  orderly shutdown return all fans to Auto and restore captured minimum floors.
 - Wake never reapplies a preset or manual speed.
 - `Ftst=0` is written only when this process previously acquired `Ftst`.
-- No active manual state is persisted.
+- No active manual target is persisted. A root-owned `0600` journal stores only
+  the data required for automatic crash recovery.
 
-`kill -9` cannot be caught by userspace. The hardware gate therefore includes a
-separate test proving macOS reclaims fan control after a forced helper
-termination. See [docs/SAFETY.md](docs/SAFETY.md) for the complete contract.
+`kill -9` cannot be caught by userspace. On the next helper start, a
+fingerprint-matching journal is restored before writes are accepted. The
+hardware gate still includes a forced-termination test. See
+[docs/SAFETY.md](docs/SAFETY.md) for the complete contract.
 
 ## Requirements
 
@@ -212,8 +223,11 @@ Supported modes are `--debug`, `--logs`, `--telemetry`, and `--verify`.
 - **Manual control** applies one bounded target to one fan.
 - **Settings → Presets** changes the persisted preset percentages.
 - **Settings → Sensors** shows the validated CPU, GPU, and battery readings
-  available for the current model.
-- **Settings → Helper** reports installation and XPC state.
+  available for the current model, plus expandable allowlisted diagnostics.
+- **Settings → Helper** reports installation, XPC state, write eligibility,
+  capability fingerprint, and explicit hardware validation.
+- A second MFanControl instance displays telemetry in read-only mode while the
+  first healthy session owns the control lease.
 
 Preset targets use:
 
@@ -264,9 +278,10 @@ Read-only hardware tests require explicit opt-in:
 MFAN_HARDWARE_TESTS=1 make test
 ```
 
-There are no automatic write hardware tests. Root write validation is manual
-and begins at `minimum + 500 RPM`, or the smaller valid target. The complete
-gate must cover:
+There are no automatic write hardware tests. Write validation starts only
+after explicit confirmation in **Settings → Helper**. It tests each fan at
+`minimum + 500 RPM`, capped at its maximum, and restores Auto before persisting
+approval. The complete manual gate must still cover:
 
 1. One Auto → Manual → Auto cycle with RPM verification.
 2. Twenty consecutive cycles with no fan left in manual mode.
@@ -274,8 +289,9 @@ gate must cover:
 4. Helper termination and orderly shutdown.
 5. Sleep and wake without restoring manual control.
 6. Serious and critical thermal-pressure recovery.
-7. A separate `kill -9` reclaim test proving macOS restores system control
-   within 15 seconds.
+7. AC/battery drift with one bounded reapply and repeated-drift fallback.
+8. A separate `kill -9` recovery test proving mode and every `F%dMn` baseline
+   are restored after helper restart.
 
 Do not change a model from experimental to verified until the full gate passes
 on the current macOS build.
@@ -291,8 +307,8 @@ MFanControl.app
               v
 io.clover.mfancontrol.helper (root launchd service)
   HelperXPCService
-  RequestProcessor / SafetyStateMachine
-  FanController
+  RequestProcessor / owner lease / SafetyStateMachine
+  FanController / AppleSiliconFanEngine
               |
               | typed known-key access
               v

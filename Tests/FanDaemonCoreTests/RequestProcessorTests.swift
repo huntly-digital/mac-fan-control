@@ -112,6 +112,311 @@ final class RequestProcessorTests: XCTestCase {
     let calls = await controller.calls
     XCTAssertEqual(calls, ["snapshot", "manual:0:3700", "manual:1:4200", "all-auto"])
   }
+
+  func testFirstHealthyHelloOwnsControllerAndObserverWritesAreRejected() async {
+    let controller = FakeFanController()
+    let processor = RequestProcessor(controller: controller)
+    let owner = UUID()
+    let observer = UUID()
+
+    _ = await processor.handle(
+      FanRequest(id: "owner", command: .hello),
+      sessionID: owner
+    )
+    let observerHello = await processor.handle(
+      FanRequest(id: "observer", command: .hello),
+      sessionID: observer
+    )
+    let observerWrite = await processor.handle(
+      FanRequest(id: "observer-write", command: .setManual, fan: 0, rpm: 3_000),
+      sessionID: observer
+    )
+    let ownerWrite = await processor.handle(
+      FanRequest(id: "owner-write", command: .setManual, fan: 0, rpm: 3_000),
+      sessionID: owner
+    )
+
+    XCTAssertEqual(observerHello.response.controlAccess, .observer)
+    XCTAssertEqual(observerWrite.response.error, .controllerBusy)
+    XCTAssertTrue(ownerWrite.response.ok)
+  }
+
+  func testObserverDisconnectDoesNotRestoreButOwnerDisconnectDoes() async {
+    let controller = FakeFanController()
+    let processor = RequestProcessor(controller: controller)
+    let owner = UUID()
+    let observer = UUID()
+    _ = await processor.handle(FanRequest(command: .hello), sessionID: owner)
+    _ = await processor.handle(FanRequest(command: .hello), sessionID: observer)
+    _ = await processor.handle(
+      FanRequest(command: .setManual, fan: 0, rpm: 3_000),
+      sessionID: owner
+    )
+
+    await processor.handleDisconnect(sessionID: observer)
+    let observerDisconnectCalls = await controller.calls
+    XCTAssertEqual(observerDisconnectCalls.filter { $0 == "all-auto" }.count, 0)
+
+    await processor.handleDisconnect(sessionID: owner)
+    let ownerDisconnectCalls = await controller.calls
+    XCTAssertEqual(ownerDisconnectCalls.filter { $0 == "all-auto" }.count, 1)
+  }
+
+  func testOldOwnerWriteIsRejectedWhileDisconnectRestoreIsInProgress() async {
+    let controller = RestoreGateFanController()
+    let processor = RequestProcessor(controller: controller)
+    let owner = UUID()
+    _ = await processor.handle(FanRequest(command: .hello), sessionID: owner)
+    _ = await processor.handle(
+      FanRequest(command: .setManual, fan: 0, rpm: 3_000),
+      sessionID: owner
+    )
+
+    let disconnect = Task {
+      await processor.handleDisconnect(sessionID: owner)
+    }
+    await controller.waitUntilRestoreStarted()
+    let lateWrite = await processor.handle(
+      FanRequest(command: .setManual, fan: 0, rpm: 3_200),
+      sessionID: owner
+    )
+    await controller.finishRestore()
+    await disconnect.value
+
+    XCTAssertEqual(lateWrite.response.error, .controllerBusy)
+    let calls = await controller.calls
+    XCTAssertFalse(calls.contains("manual:0:3200"))
+  }
+
+  func testValidationRequiresOwnerAndExplicitConfirmation() async {
+    let controller = FakeFanController()
+    let processor = RequestProcessor(controller: controller)
+    let owner = UUID()
+    _ = await processor.handle(FanRequest(command: .hello), sessionID: owner)
+
+    let missingConfirmation = await processor.handle(
+      FanRequest(command: .validateHardware),
+      sessionID: owner
+    )
+    let confirmed = await processor.handle(
+      FanRequest(command: .validateHardware, validationConfirmed: true),
+      sessionID: owner
+    )
+
+    XCTAssertEqual(missingConfirmation.response.error, .malformedRequest)
+    XCTAssertEqual(confirmed.response.validation?.status, .passed)
+  }
+
+  func testPowerDriftReappliesOnceThenRestoresAutomatic() async {
+    let controller = FakeFanController()
+    let processor = RequestProcessor(controller: controller)
+    let owner = UUID()
+    _ = await processor.handle(FanRequest(command: .hello), sessionID: owner)
+    _ = await processor.handle(
+      FanRequest(command: .setManual, fan: 0, rpm: 3_000),
+      sessionID: owner
+    )
+
+    await processor.handlePowerSourceChanged()
+    await processor.handlePowerSourceChanged()
+
+    let calls = await controller.calls
+    XCTAssertEqual(calls.filter { $0 == "manual:0:3000" }.count, 2)
+    XCTAssertEqual(calls.filter { $0 == "all-auto" }.count, 1)
+  }
+
+  func testSecondPowerDriftDuringReapplyPreemptsToAutomatic() async {
+    let controller = RestoreGateFanController(
+      gateRestore: false,
+      gateReapply: true
+    )
+    let processor = RequestProcessor(controller: controller)
+    let owner = UUID()
+    _ = await processor.handle(FanRequest(command: .hello), sessionID: owner)
+    _ = await processor.handle(
+      FanRequest(command: .setManual, fan: 0, rpm: 3_000),
+      sessionID: owner
+    )
+
+    let firstDrift = Task {
+      await processor.handlePowerSourceChanged()
+    }
+    await controller.waitUntilReapplyStarted()
+    await processor.handlePowerSourceChanged()
+    await controller.finishReapply()
+    await firstDrift.value
+
+    let calls = await controller.calls
+    XCTAssertEqual(calls.filter { $0 == "all-auto" }.count, 1)
+  }
+
+  func testReturningLastManualFanToAutomaticStopsPowerReapply() async {
+    let controller = FakeFanController()
+    let processor = RequestProcessor(controller: controller)
+    let owner = UUID()
+    _ = await processor.handle(FanRequest(command: .hello), sessionID: owner)
+    _ = await processor.handle(
+      FanRequest(command: .setManual, fan: 0, rpm: 3_000),
+      sessionID: owner
+    )
+    _ = await processor.handle(
+      FanRequest(command: .setAutomatic, fan: 0),
+      sessionID: owner
+    )
+
+    await processor.handlePowerSourceChanged()
+
+    let calls = await controller.calls
+    XCTAssertEqual(calls.filter { $0 == "manual:0:3000" }.count, 1)
+    XCTAssertEqual(calls.filter { $0 == "all-auto" }.count, 0)
+  }
+
+  func testHeartbeatExpiryReleasesLeaseForNextHealthyHello() async {
+    let start = Date(timeIntervalSince1970: 10_000)
+    let controller = FakeFanController()
+    let processor = RequestProcessor(controller: controller, now: { start })
+    let first = UUID()
+    let next = UUID()
+    _ = await processor.handle(FanRequest(command: .hello), sessionID: first)
+    _ = await processor.handle(
+      FanRequest(command: .setManual, fan: 0, rpm: 3_000),
+      sessionID: first
+    )
+
+    await processor.tick(at: start.addingTimeInterval(5.1))
+    let nextHello = await processor.handle(
+      FanRequest(command: .hello),
+      sessionID: next
+    )
+
+    XCTAssertEqual(nextHello.response.controlAccess, .owner)
+  }
+
+  func testDuplicateOwnerHelloDoesNotDisableManualHeartbeatExpiry() async {
+    let start = Date(timeIntervalSince1970: 10_000)
+    let controller = FakeFanController()
+    let processor = RequestProcessor(controller: controller, now: { start })
+    let owner = UUID()
+    _ = await processor.handle(FanRequest(command: .hello), sessionID: owner)
+    _ = await processor.handle(
+      FanRequest(command: .setManual, fan: 0, rpm: 3_000),
+      sessionID: owner
+    )
+
+    _ = await processor.handle(FanRequest(command: .hello), sessionID: owner)
+    await processor.tick(at: start.addingTimeInterval(5.1))
+
+    let calls = await controller.calls
+    XCTAssertEqual(calls.filter { $0 == "all-auto" }.count, 1)
+  }
+}
+
+private actor RestoreGateFanController: FanControlling {
+  private(set) var calls: [String] = []
+  private let gateRestore: Bool
+  private let gateReapply: Bool
+  private var manualCallCount = 0
+  private var restoreStarted = false
+  private var restoreWaiter: CheckedContinuation<Void, Never>?
+  private var restoreFinisher: CheckedContinuation<Void, Never>?
+  private var reapplyStarted = false
+  private var reapplyWaiter: CheckedContinuation<Void, Never>?
+  private var reapplyFinisher: CheckedContinuation<Void, Never>?
+
+  init(gateRestore: Bool = true, gateReapply: Bool = false) {
+    self.gateRestore = gateRestore
+    self.gateReapply = gateReapply
+  }
+
+  func discoverHardware() async throws -> HardwareProfile {
+    HardwareProfile(
+      model: "Mac15,7",
+      processor: "Apple M3 Pro",
+      fanCount: 1,
+      hasFtst: true,
+      modeKeyFormat: "F%dMd",
+      strategy: .directThenFtst,
+      support: .experimental
+    )
+  }
+
+  func snapshot() async throws -> [FanSnapshot] {
+    [fan(mode: .manual, actual: 3_000)]
+  }
+
+  func setManual(fan: Int, rpm: Int) async throws -> FanSnapshot {
+    manualCallCount += 1
+    calls.append("manual:\(fan):\(rpm)")
+    if gateReapply, manualCallCount > 1 {
+      reapplyStarted = true
+      reapplyWaiter?.resume()
+      reapplyWaiter = nil
+      await withCheckedContinuation { continuation in
+        reapplyFinisher = continuation
+      }
+    }
+    return self.fan(mode: .manual, actual: rpm)
+  }
+
+  func setAutomatic(fan: Int) async throws -> FanSnapshot {
+    self.fan(mode: .automatic, actual: 2_000)
+  }
+
+  func setAllAutomatic() async throws {
+    calls.append("all-auto")
+    restoreStarted = true
+    restoreWaiter?.resume()
+    restoreWaiter = nil
+    if gateRestore {
+      await withCheckedContinuation { continuation in
+        restoreFinisher = continuation
+      }
+    }
+  }
+
+  func validateHardware() async throws -> HardwareValidationReport {
+    HardwareValidationReport(
+      status: .passed,
+      completedFans: 1,
+      totalFans: 1,
+      message: "passed"
+    )
+  }
+
+  func waitUntilRestoreStarted() async {
+    guard !restoreStarted else { return }
+    await withCheckedContinuation { continuation in
+      restoreWaiter = continuation
+    }
+  }
+
+  func finishRestore() {
+    restoreFinisher?.resume()
+    restoreFinisher = nil
+  }
+
+  func waitUntilReapplyStarted() async {
+    guard !reapplyStarted else { return }
+    await withCheckedContinuation { continuation in
+      reapplyWaiter = continuation
+    }
+  }
+
+  func finishReapply() {
+    reapplyFinisher?.resume()
+    reapplyFinisher = nil
+  }
+
+  private func fan(mode: FanMode, actual: Int) -> FanSnapshot {
+    FanSnapshot(
+      index: 0,
+      actualRPM: actual,
+      targetRPM: actual,
+      minimumRPM: 2_000,
+      maximumRPM: 5_000,
+      mode: mode
+    )
+  }
 }
 
 private actor PresetFanController: FanControlling {
@@ -190,6 +495,16 @@ private actor PresetFanController: FanControlling {
   func setAllAutomatic() async throws {
     calls.append("all-auto")
   }
+
+  func validateHardware() async throws -> HardwareValidationReport {
+    calls.append("validate")
+    return HardwareValidationReport(
+      status: .passed,
+      completedFans: 2,
+      totalFans: 2,
+      message: "passed"
+    )
+  }
 }
 
 private actor FakeFanController: FanControlling {
@@ -227,6 +542,16 @@ private actor FakeFanController: FanControlling {
 
   func setAllAutomatic() async throws {
     calls.append("all-auto")
+  }
+
+  func validateHardware() async throws -> HardwareValidationReport {
+    calls.append("validate")
+    return HardwareValidationReport(
+      status: .passed,
+      completedFans: 1,
+      totalFans: 1,
+      message: "passed"
+    )
   }
 
   private func fan(mode: FanMode, actual: Int) -> FanSnapshot {

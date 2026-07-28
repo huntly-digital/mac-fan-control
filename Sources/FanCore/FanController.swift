@@ -32,31 +32,50 @@ public protocol FanControlling: Sendable {
   func setManual(fan: Int, rpm: Int) async throws -> FanSnapshot
   func setAutomatic(fan: Int) async throws -> FanSnapshot
   func setAllAutomatic() async throws
+  func validateHardware() async throws -> HardwareValidationReport
 }
 
 extension FanControlling {
   public func temperatureSnapshot() async throws -> TemperatureSnapshot? { nil }
+  public func validateHardware() async throws -> HardwareValidationReport {
+    throw ControlError.unsupportedHardware
+  }
 }
 
 public actor FanController: FanControlling {
   private let transport: any SMCTransport
   private let isPrivileged: @Sendable () -> Bool
-  private let sleep: @Sendable (Duration) async throws -> Void
-  private let unlockAttempts: Int
-  private let verificationAttempts: Int
   private let temperatureModel: String?
+  private let hardwareModel: String?
+  private let processorName: String?
+  private let osBuild: String?
+  private let requiresApproval: Bool
+  private let approvalStore: HardwareApprovalStore?
+  private let engine: AppleSiliconFanEngine
 
   private var cachedProfile: HardwareProfile?
-  private var manualFans: Set<Int> = []
-  private var ownsFtst = false
+  private var cachedCapabilities: HardwareCapabilities?
+  private var controlEpoch: UInt64 = 0
 
   public init() throws {
-    self.transport = try SMCConnection()
+    let transport = try SMCConnection()
+    let approvalStore = HardwareApprovalStore()
+    self.transport = transport
     self.isPrivileged = { geteuid() == 0 }
-    self.sleep = { duration in try await Task.sleep(for: duration) }
-    self.unlockAttempts = 100
-    self.verificationAttempts = 100
     self.temperatureModel = nil
+    self.hardwareModel = nil
+    self.processorName = nil
+    self.osBuild = nil
+    self.requiresApproval = true
+    self.approvalStore = approvalStore
+    self.engine = AppleSiliconFanEngine(
+      transport: transport,
+      sleep: { duration in try await Task.sleep(for: duration) },
+      unlockAttempts: 100,
+      verificationAttempts: 100,
+      recoveryStore: RecoveryStateStore(),
+      approvalStore: approvalStore
+    )
   }
 
   package init(
@@ -65,20 +84,70 @@ public actor FanController: FanControlling {
     sleep: @escaping @Sendable (Duration) async throws -> Void,
     unlockAttempts: Int = 100,
     verificationAttempts: Int = 100,
-    temperatureModel: String? = nil
+    temperatureModel: String? = nil,
+    requiresApproval: Bool = false,
+    approvalStore: HardwareApprovalStore? = nil,
+    recoveryStore: RecoveryStateStore? = nil,
+    hardwareModel: String? = nil,
+    processorName: String? = nil,
+    osBuild: String? = nil
   ) {
     self.transport = transport
     self.isPrivileged = isPrivileged
-    self.sleep = sleep
-    self.unlockAttempts = unlockAttempts
-    self.verificationAttempts = verificationAttempts
     self.temperatureModel = temperatureModel
+    self.hardwareModel = hardwareModel
+    self.processorName = processorName
+    self.osBuild = osBuild
+    self.requiresApproval = requiresApproval
+    self.approvalStore = approvalStore
+    self.engine = AppleSiliconFanEngine(
+      transport: transport,
+      sleep: sleep,
+      unlockAttempts: unlockAttempts,
+      verificationAttempts: verificationAttempts,
+      recoveryStore: recoveryStore,
+      approvalStore: approvalStore
+    )
   }
 
   public func discoverHardware() throws -> HardwareProfile {
     if let cachedProfile { return cachedProfile }
     do {
-      let profile = try HardwareProfiler.discover(using: transport)
+      var capabilities = try HardwareProfiler.inspect(
+        using: transport,
+        model: hardwareModel,
+        processor: processorName,
+        osBuild: osBuild
+      )
+      if engine.prepare(capabilities) {
+        capabilities = try HardwareProfiler.inspect(
+          using: transport,
+          model: hardwareModel,
+          processor: processorName,
+          osBuild: osBuild
+        )
+      }
+      let fingerprint = try capabilities.fingerprint()
+      let approved: Bool
+      if requiresApproval {
+        approved = try approvalStore?.isApproved(
+          model: capabilities.model,
+          osBuild: capabilities.osBuild,
+          fingerprint: fingerprint
+        ) ?? false
+      } else {
+        approved = true
+      }
+      let eligibility: WriteEligibility
+      if engine.runtimeBlocked {
+        eligibility = .blocked
+      } else if capabilities.writeEligibility == .unsupported {
+        eligibility = .unsupported
+      } else {
+        eligibility = approved ? .approved : .validationRequired
+      }
+      let profile = try capabilities.profile(writeEligibility: eligibility)
+      cachedCapabilities = capabilities
       cachedProfile = profile
       return profile
     } catch {
@@ -88,20 +157,17 @@ public actor FanController: FanControlling {
 
   public func snapshot() throws -> [FanSnapshot] {
     let profile = try discoverHardware()
-    return try (0..<profile.fanCount).map { try snapshot(fan: $0, profile: profile) }
+    let capabilities = try capabilities()
+    return try (0..<profile.fanCount).map {
+      try engine.snapshot(fan: $0, capabilities: capabilities)
+    }
   }
 
   public func temperatureSnapshot() async throws -> TemperatureSnapshot? {
     let profile = try discoverHardware()
-    guard (temperatureModel ?? profile.model) == "Mac15,7" else { return nil }
-    guard let cpu = readTemperature(keys: ["TCMz"]) else { return nil }
-
-    return TemperatureSnapshot(
-      cpuMaximumCelsius: cpu,
-      gpuCelsius: readTemperature(keys: ["TG0D"]),
-      batteryCelsius: readTemperature(keys: ["TB0T"]),
-      primarySensorName: "CPU Max"
-    )
+    return TemperatureSensorRegistry.snapshot(model: temperatureModel ?? profile.model) {
+      readTemperature(keys: [$0])
+    }
   }
 
   public func probe() throws -> ProbeReport {
@@ -132,65 +198,17 @@ public actor FanController: FanControlling {
     guard isPrivileged() else { throw ControlError.notPrivileged }
     let profile = try discoverHardware()
     try validateFan(fan, profile: profile)
-    guard let modeFormat = profile.modeKeyFormat else {
-      throw ControlError.unsupportedHardware
-    }
-
-    let before = try snapshot(fan: fan, profile: profile)
-    _ = try RPMPolicy.validate(rpm, minimum: before.minimumRPM, maximum: before.maximumRPM)
-    let modeKey = key(modeFormat, fan: fan)
-
-    var needsFtstFallback = false
+    try requireWriteApproval(profile)
     do {
-      try transport.writeKey(modeKey, bytes: [1])
-    } catch let bridgeError as SMCBridgeError {
-      guard case .firmwareRejected = bridgeError, profile.hasFtst else {
-        throw map(bridgeError)
-      }
-      needsFtstFallback = true
+      return try await engine.setManual(
+        fan: fan,
+        rpm: rpm,
+        capabilities: capabilities()
+      )
     } catch {
-      throw map(error)
-    }
-
-    if !needsFtstFallback {
-      do {
-        try await sleep(.milliseconds(100))
-        needsFtstFallback = try transport.readKey(modeKey).bytes.first != 1
-      } catch {
-        throw map(error)
-      }
-    }
-    if needsFtstFallback {
-      guard profile.hasFtst else { throw ControlError.firmwareRejected }
-      try await unlockWithFtst(modeKey: modeKey)
-    }
-
-    do {
-      let targetKey = key("F%dTg", fan: fan)
-      let targetInfo = try transport.readKeyInfo(targetKey)
-      let bytes = try SMCValueCodec.encodeRPM(Double(rpm), dataType: targetInfo.dataType)
-      try transport.writeKey(targetKey, bytes: bytes)
-      manualFans.insert(fan)
-
-      for attempt in 0..<max(verificationAttempts, 1) {
-        let current = try snapshot(fan: fan, profile: profile)
-        if RPMPolicy.isVerified(actual: current.actualRPM, target: rpm) {
-          return current
-        }
-        if attempt + 1 < verificationAttempts {
-          try await sleep(.milliseconds(100))
-        }
-      }
-    } catch let error as ControlError {
-      try? setAllAutomatic()
+      if engine.runtimeBlocked { cachedProfile = nil }
       throw error
-    } catch {
-      try? setAllAutomatic()
-      throw map(error)
     }
-
-    try? setAllAutomatic()
-    throw ControlError.verificationFailed
   }
 
   @discardableResult
@@ -198,109 +216,78 @@ public actor FanController: FanControlling {
     guard isPrivileged() else { throw ControlError.notPrivileged }
     let profile = try discoverHardware()
     try validateFan(fan, profile: profile)
-    guard let modeFormat = profile.modeKeyFormat else {
-      throw ControlError.unsupportedHardware
-    }
-
+    controlEpoch &+= 1
     do {
-      try transport.writeKey(key(modeFormat, fan: fan), bytes: [0])
-      manualFans.remove(fan)
-      if manualFans.isEmpty {
-        try resetOwnedFtstIfNeeded()
-      }
-      return try snapshot(fan: fan, profile: profile)
+      return try engine.setAutomatic(fan: fan, capabilities: capabilities())
     } catch {
-      throw map(error)
+      if engine.runtimeBlocked { cachedProfile = nil }
+      throw error
     }
   }
 
   public func setAllAutomatic() throws {
     guard isPrivileged() else { throw ControlError.notPrivileged }
+    _ = try discoverHardware()
+    controlEpoch &+= 1
+    do {
+      try engine.restoreAll(capabilities())
+    } catch {
+      if engine.runtimeBlocked { cachedProfile = nil }
+      throw error
+    }
+  }
+
+  public func validateHardware() async throws -> HardwareValidationReport {
+    guard isPrivileged() else { throw ControlError.notPrivileged }
     let profile = try discoverHardware()
-    guard let modeFormat = profile.modeKeyFormat else {
+    guard profile.writeEligibility != .unsupported else {
       throw ControlError.unsupportedHardware
     }
-
-    var firstError: Error?
-    for fan in 0..<profile.fanCount {
-      do {
-        try transport.writeKey(key(modeFormat, fan: fan), bytes: [0])
-      } catch {
-        firstError = firstError ?? error
-      }
+    guard profile.writeEligibility != .blocked else {
+      throw engine.runtimeBlockError ?? ControlError.baselineRestoreFailed
     }
-    manualFans.removeAll()
+    let capabilities = try capabilities()
+    let validationEpoch = controlEpoch
+    var completed = 0
     do {
-      try resetOwnedFtstIfNeeded()
-    } catch {
-      firstError = firstError ?? error
-    }
-    if let firstError { throw map(firstError) }
-  }
-
-  private func unlockWithFtst(modeKey: String) async throws {
-    do {
-      let previousFtst = try transport.readKey("Ftst").bytes.first
-      try transport.writeKey("Ftst", bytes: [1])
-      ownsFtst = previousFtst != 1
-      try await sleep(.milliseconds(500))
-    } catch {
-      try? resetOwnedFtstIfNeeded()
-      throw map(error)
-    }
-
-    for attempt in 0..<max(unlockAttempts, 1) {
-      do {
-        try transport.writeKey(modeKey, bytes: [1])
-        return
-      } catch {
-        if attempt + 1 < unlockAttempts {
-          do {
-            try await sleep(.milliseconds(100))
-          } catch {
-            try? resetOwnedFtstIfNeeded()
-            throw map(error)
-          }
+      for fan in capabilities.fans.sorted(by: { $0.index < $1.index }) {
+        guard validationEpoch == controlEpoch else {
+          throw ControlError.verificationFailed
         }
+        guard let minimum = fan.minimumRPM, let maximum = fan.maximumRPM else {
+          throw ControlError.capabilityMismatch
+        }
+        let target = min(maximum, minimum + 500)
+        _ = try await engine.setManual(
+          fan: fan.index,
+          rpm: target,
+          capabilities: capabilities
+        )
+        guard validationEpoch == controlEpoch else {
+          throw ControlError.verificationFailed
+        }
+        _ = try engine.setAutomatic(fan: fan.index, capabilities: capabilities)
+        completed += 1
       }
-    }
-
-    try? resetOwnedFtstIfNeeded()
-    throw ControlError.unlockTimedOut
-  }
-
-  private func resetOwnedFtstIfNeeded() throws {
-    guard ownsFtst else { return }
-    defer { ownsFtst = false }
-    try transport.writeKey("Ftst", bytes: [0])
-  }
-
-  private func snapshot(fan: Int, profile: HardwareProfile) throws -> FanSnapshot {
-    try validateFan(fan, profile: profile)
-    let actual = try readRPM(key("F%dAc", fan: fan))
-    let target = try readRPM(key("F%dTg", fan: fan))
-    let minimum = try readRPM(key("F%dMn", fan: fan))
-    let maximum = try readRPM(key("F%dMx", fan: fan))
-    let mode = try readMode(fan: fan, profile: profile)
-    return FanSnapshot(
-      index: fan,
-      actualRPM: actual,
-      targetRPM: target,
-      minimumRPM: minimum,
-      maximumRPM: maximum,
-      mode: mode
-    )
-  }
-
-  private func readRPM(_ key: String) throws -> Int {
-    do {
-      let value = try transport.readKey(key)
-      return Int(
-        try SMCValueCodec.decodeRPM(
-          bytes: value.bytes,
-          dataType: value.info.dataType
-        ).rounded())
+      try engine.restoreAll(capabilities)
+      guard let approvalStore else { throw ControlError.firmwareRejected }
+      try approvalStore.approve(
+        HardwareApproval(
+          model: capabilities.model,
+          osBuild: capabilities.osBuild,
+          capabilityFingerprint: try capabilities.fingerprint(),
+          validatedAt: Date()
+        )
+      )
+      cachedProfile = nil
+      return HardwareValidationReport(
+        status: .passed,
+        completedFans: completed,
+        totalFans: capabilities.fanCount,
+        message: "Hardware validation passed."
+      )
     } catch {
+      try? engine.restoreAll(capabilities)
       throw map(error)
     }
   }
@@ -318,14 +305,21 @@ public actor FanController: FanControlling {
     return nil
   }
 
-  private func readMode(fan: Int, profile: HardwareProfile) throws -> FanMode {
-    guard let modeFormat = profile.modeKeyFormat else { return .unknown }
-    let value = try transport.readKey(key(modeFormat, fan: fan)).bytes.first
-    switch value {
-    case 0: return .automatic
-    case 1: return .manual
-    case 3: return .system
-    default: return .unknown
+  private func capabilities() throws -> HardwareCapabilities {
+    guard let cachedCapabilities else { throw ControlError.capabilityMismatch }
+    return cachedCapabilities
+  }
+
+  private func requireWriteApproval(_ profile: HardwareProfile) throws {
+    switch profile.writeEligibility {
+    case .approved:
+      return
+    case .validationRequired:
+      throw ControlError.hardwareValidationRequired
+    case .blocked:
+      throw engine.runtimeBlockError ?? ControlError.baselineRestoreFailed
+    case .unsupported:
+      throw ControlError.unsupportedHardware
     }
   }
 
@@ -335,12 +329,9 @@ public actor FanController: FanControlling {
     }
   }
 
-  private func key(_ format: String, fan: Int) -> String {
-    String(format: format, fan)
-  }
-
   private func map(_ error: Error) -> ControlError {
     if let controlError = error as? ControlError { return controlError }
+    if error is DecodingError { return .capabilityMismatch }
     guard let bridgeError = error as? SMCBridgeError else {
       return .firmwareRejected
     }
